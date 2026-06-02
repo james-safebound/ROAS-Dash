@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Safebound Moving & Storage — ROAS Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --card: #21253a; --border: #2e3450;
+    --accent: #4f6ef7; --accent2: #38c9a8; --warn: #f7a84f; --danger: #f75a5a;
+    --text: #e8eaf6; --muted: #7b82a8; --green: #38c9a8; --red: #f75a5a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+  header h1 span { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .header-meta { color: var(--muted); font-size: 13px; }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+
+  .controls { display: flex; gap: 12px; margin-bottom: 24px; align-items: center; flex-wrap: wrap; }
+  select, button { background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  select:focus, button:focus { outline: 2px solid var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { opacity: 0.88; }
+  .controls label { color: var(--muted); font-size: 13px; }
+  .edit-hint { font-size: 11px; color: var(--muted); margin-left: auto; }
+  #editBtn.active { background: #38c9a820; border-color: var(--green); color: var(--green); }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+  .kpi .value { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+  .kpi .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .row { display: grid; gap: 20px; margin-bottom: 20px; }
+  .row.two { grid-template-columns: 1fr 1fr; }
+  @media(max-width: 900px) { .row.two { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .panel h2 { font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 16px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  thead th:first-child { text-align: left; }
+  tbody tr { border-bottom: 1px solid #ffffff08; }
+  tbody tr:hover { background: #ffffff05; }
+  tbody td { padding: 9px 12px; text-align: right; white-space: nowrap; }
+  tbody td:first-child { text-align: left; font-weight: 500; }
+  .roas-badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-weight: 700; font-size: 12px; }
+  .roas-great { background: #38c9a820; color: var(--green); }
+  .roas-good  { background: #4f6ef720; color: var(--accent); }
+  .roas-warn  { background: #f7a84f20; color: var(--warn); }
+  .roas-bad   { background: #f75a5a20; color: var(--red); }
+  .channel-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+  .source-badge { font-size: 10px; color: var(--muted); margin-left: 6px; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+
+  td.editable input { background: transparent; border: none; border-bottom: 1px solid var(--accent); color: var(--text); width: 80px; text-align: right; font-size: 13px; padding: 1px 2px; outline: none; }
+
+  .chart-container { position: relative; height: 280px; }
+
+  .insights-list { display: flex; flex-direction: column; gap: 12px; }
+  .insight { background: var(--surface); border-left: 3px solid; border-radius: 0 8px 8px 0; padding: 12px 16px; }
+  .insight.good { border-color: var(--green); }
+  .insight.warn { border-color: var(--warn); }
+  .insight.bad  { border-color: var(--red); }
+  .insight.info { border-color: var(--accent); }
+  .insight .i-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .insight .i-body  { color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+  .month-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .month-tab { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; transition: all .15s; }
+  .month-tab.active { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .month-tab:hover:not(.active) { border-color: var(--accent); }
+
+  /* Sync panel */
+  .sync-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; background: var(--surface); border-left: 1px solid var(--border); z-index: 100; transform: translateX(100%); transition: transform .25s ease; display: flex; flex-direction: column; }
+  .sync-panel.open { transform: translateX(0); }
+  .sync-header { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .sync-header h3 { font-size: 15px; font-weight: 700; }
+  .sync-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 0; }
+  .sync-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+  .sync-source { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .sync-source-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .sync-source-name { font-weight: 600; font-size: 13px; }
+  .sync-btn { background: var(--accent); border: none; color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; font-weight: 600; }
+  .sync-btn:hover { opacity: 0.85; }
+  .sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .sync-status { font-size: 12px; color: var(--muted); }
+  .sync-status.success { color: var(--green); }
+  .sync-status.error { color: var(--red); }
+  .sync-status.running { color: var(--warn); }
+  .log-section h4 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin: 20px 0 10px; }
+  .log-entry { font-size: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .log-entry .log-source { font-weight: 600; }
+  .log-entry .log-msg { color: var(--muted); margin-top: 2px; }
+  .log-entry .log-time { color: var(--muted); font-size: 11px; }
+
+  .loading-overlay { position: fixed; inset: 0; background: #0f1117cc; z-index: 50; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--muted); display: none; }
+  .loading-overlay.show { display: flex; }
+
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">Loading data…</div>
+
+<header>
+  <div>
+    <h1>Safebound Moving &amp; Storage — <span>ROAS Dashboard</span></h1>
+  </div>
+  <div class="header-right">
+    <div class="header-meta">Updated: <span id="lastUpdated"></span></div>
+    <button onclick="openSync()">⚡ Sync Data</button>
+  </div>
+</header>
+
+<!-- Sync Panel -->
+<div class="sync-panel" id="syncPanel">
+  <div class="sync-header">
+    <h3>Data Sync</h3>
+    <button class="sync-close" onclick="closeSync()">×</button>
+  </div>
+  <div class="sync-body">
+    <div class="sync-source">
+      <div class="sync-source-header">
+        <span class="sync-source-name">Google Ads</span>
+        <button class="sync-btn" onclick="triggerSync('google-ads', this)">Sync Now</button>
+      </div>
+      <div class="sync-status" id="status-google-ads">—</div>
+    </div>
+    <div class="sync-source">
+      <div class="sync-source-header">
+        <span class="sync-source-name">LSA (3 accounts)</span>
+        <button class="sync-btn" onclick="triggerSync('lsa', this)">Sync Now</button>
+      </div>
+      <div class="sync-status" id="status-lsa">—</div>
+    </div>
+    <div class="sync-source">
+      <div class="sync-source-header">
+        <span class="sync-source-name">Granot CRM</span>
+        <button class="sync-btn" onclick="triggerSync('granot', this)">Sync Now</button>
+      </div>
+      <div class="sync-status" id="status-granot">—</div>
+    </div>
+    <div class="sync-source">
+      <div class="sync-source-header">
+        <span class="sync-source-name">Invoice Emails</span>
+        <button class="sync-btn" onclick="triggerSync('invoices', this)">Sync Now</button>
+      </div>
+      <div class="sync-status" id="status-invoices">—</div>
+    </div>
+
+    <div class="log-section">
+      <h4>Recent Sync Log</h4>
+      <div id="syncLogs">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <div class="controls">
+    <label>Period:</label>
+    <select id="periodSelect">
+      <option value="all">All Months</option>
+    </select>
+    <button id="editBtn" onclick="toggleEdit()">✏️ Edit Data</button>
+    <button onclick="exportCSV()">⬇️ Export CSV</button>
+    <span class="edit-hint" id="editHint"></span>
+  </div>
+
+  <div class="month-tabs" id="monthTabs"></div>
+  <div class="kpi-grid" id="kpiGrid"></div>
+
+  <div class="row two" style="margin-bottom:20px">
+    <div class="panel">
+      <h2>Revenue vs. Ad Spend</h2>
+      <div class="chart-container"><canvas id="revenueChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>ROAS by Channel</h2>
+      <div class="chart-container"><canvas id="roasChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:20px">
+    <h2>Channel Performance</h2>
+    <div class="table-wrap">
+      <table id="channelTable">
+        <thead>
+          <tr>
+            <th style="text-align:left">Channel</th>
+            <th>Ad Spend</th>
+            <th>Revenue</th>
+            <th>ROAS</th>
+            <th>Leads / Calls</th>
+            <th>Booked Jobs</th>
+            <th>Close Rate</th>
+            <th>Cost / Lead</th>
+            <th>Cost / Booking</th>
+          </tr>
+        </thead>
+        <tbody id="channelTbody"></tbody>
+        <tfoot id="channelTfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <div class="row two">
+    <div class="panel">
+      <h2>Monthly ROAS Trend</h2>
+      <div class="chart-container"><canvas id="trendChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>AI Insights</h2>
+      <div class="insights-list" id="insightsList"></div>
+    </div>
+  </div>
+</div>
+
+<footer>Safebound Moving &amp; Storage · Internal Marketing Dashboard</footer>
+
+<script>
+// ─── CHANNELS (loaded from API) ───────────────────────────────────────────────
+let CHANNELS = [];
+let MONTHS   = [];  // { key: 'YYYY-MM', label: 'Mon YYYY' }[]
+
+// DATA shape: { [channelId]: { [YYYY-MM]: { spend, revenue, leads, booked, source } } }
+let DATA = {};
+let editMode = false;
+let charts = {};
+
+const fmt = {
+  money: n => '$' + Math.round(n).toLocaleString(),
+  pct:   n => (n * 100).toFixed(1) + '%',
+  roas:  n => n.toFixed(2) + 'x',
+  num:   n => Math.round(n).toLocaleString(),
+};
+
+function monthLabel(key) {
+  const [y, m] = key.split('-');
+  return new Date(parseInt(y), parseInt(m) - 1, 1)
+    .toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+async function apiGet(path) {
+  const res = await fetch('/api' + path);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function apiPut(path, body) {
+  const res = await fetch('/api' + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function loadData() {
+  document.getElementById('loadingOverlay').classList.add('show');
+  try {
+    const [channels, metrics] = await Promise.all([
+      apiGet('/metrics/channels'),
+      apiGet('/metrics'),
+    ]);
+
+    CHANNELS = channels;
+
+    // Discover all months present in data
+    const monthSet = new Set();
+    for (const ch of CHANNELS) {
+      if (metrics[ch.id]) Object.keys(metrics[ch.id]).forEach(m => monthSet.add(m));
+    }
+    MONTHS = Array.from(monthSet).sort().map(key => ({ key, label: monthLabel(key) }));
+
+    // Ensure all channels have entries for all months (zero-fill missing)
+    DATA = {};
+    for (const ch of CHANNELS) {
+      DATA[ch.id] = {};
+      for (const { key } of MONTHS) {
+        DATA[ch.id][key] = metrics[ch.id]?.[key] ?? { spend: 0, revenue: 0, leads: 0, booked: 0, source: 'manual' };
+      }
+    }
+
+    buildControls();
+    render();
+  } finally {
+    document.getElementById('loadingOverlay').classList.remove('show');
+  }
+}
+
+function buildControls() {
+  // Period select
+  const sel = document.getElementById('periodSelect');
+  // Remove existing month options
+  while (sel.options.length > 1) sel.remove(1);
+  MONTHS.forEach(({ key, label }) => {
+    const opt = document.createElement('option');
+    opt.value = key; opt.textContent = label;
+    sel.appendChild(opt);
+  });
+  if (MONTHS.length) sel.value = MONTHS[MONTHS.length - 1].key;
+
+  // Month tabs
+  const tabContainer = document.getElementById('monthTabs');
+  tabContainer.innerHTML = '';
+  MONTHS.forEach(({ key, label }) => {
+    const t = document.createElement('div');
+    t.className = 'month-tab';
+    t.textContent = label;
+    t.onclick = () => { document.getElementById('periodSelect').value = key; render(); };
+    tabContainer.appendChild(t);
+  });
+
+  document.getElementById('lastUpdated').textContent =
+    new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+// ─── SELECTORS ────────────────────────────────────────────────────────────────
+function getMonthKeys() {
+  const v = document.getElementById('periodSelect').value;
+  return v === 'all' ? MONTHS.map(m => m.key) : [v];
+}
+
+function aggregate(channelId, monthKeys) {
+  let spend = 0, revenue = 0, leads = 0, booked = 0;
+  for (const key of monthKeys) {
+    const d = DATA[channelId]?.[key];
+    if (!d) continue;
+    spend   += d.spend;
+    revenue += d.revenue;
+    leads   += d.leads;
+    booked  += d.booked;
+  }
+  return {
+    spend, revenue, leads, booked,
+    roas: spend > 0 ? revenue / spend : null,
+    cpl:  leads  > 0 ? spend / leads  : null,
+    cpb:  booked > 0 ? spend / booked : null,
+    cr:   leads  > 0 ? booked / leads : null,
+  };
+}
+
+function roasBadge(roas) {
+  if (roas === null) return `<span class="roas-badge roas-good">N/A</span>`;
+  if (roas >= 5)    return `<span class="roas-badge roas-great">${fmt.roas(roas)}</span>`;
+  if (roas >= 3)    return `<span class="roas-badge roas-good">${fmt.roas(roas)}</span>`;
+  if (roas >= 1.5)  return `<span class="roas-badge roas-warn">${fmt.roas(roas)}</span>`;
+  return `<span class="roas-badge roas-bad">${fmt.roas(roas)}</span>`;
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+function render() {
+  const keys = getMonthKeys();
+  const isSingle = keys.length === 1;
+
+  document.querySelectorAll('.month-tab').forEach((t, i) => {
+    t.classList.toggle('active', isSingle && MONTHS[i]?.key === keys[0]);
+  });
+
+  renderKPIs(keys);
+  renderTable(keys);
+  renderCharts(keys);
+  renderInsights(keys);
+}
+
+function renderKPIs(keys) {
+  let totalSpend = 0, totalRevenue = 0, totalLeads = 0, totalBooked = 0;
+  for (const ch of CHANNELS) {
+    const a = aggregate(ch.id, keys);
+    totalSpend   += a.spend;
+    totalRevenue += a.revenue;
+    totalLeads   += a.leads;
+    totalBooked  += a.booked;
+  }
+  const blended = totalSpend > 0 ? totalRevenue / totalSpend : 0;
+  const cpl = totalLeads  > 0 ? totalSpend / totalLeads  : 0;
+  const cpb = totalBooked > 0 ? totalSpend / totalBooked : 0;
+
+  document.getElementById('kpiGrid').innerHTML = `
+    <div class="kpi"><div class="label">Total Ad Spend</div><div class="value">${fmt.money(totalSpend)}</div><div class="sub">${keys.length} month${keys.length > 1 ? 's' : ''}</div></div>
+    <div class="kpi"><div class="label">Total Revenue</div><div class="value" style="color:var(--green)">${fmt.money(totalRevenue)}</div></div>
+    <div class="kpi"><div class="label">Blended ROAS</div><div class="value" style="color:${blended>=3?'var(--green)':blended>=1.5?'var(--warn)':'var(--red)'}">${fmt.roas(blended)}</div><div class="sub">Revenue per $1 spent</div></div>
+    <div class="kpi"><div class="label">Total Leads / Calls</div><div class="value">${fmt.num(totalLeads)}</div></div>
+    <div class="kpi"><div class="label">Booked Jobs</div><div class="value">${fmt.num(totalBooked)}</div><div class="sub">Close rate: ${fmt.pct(totalLeads > 0 ? totalBooked / totalLeads : 0)}</div></div>
+    <div class="kpi"><div class="label">Cost per Lead</div><div class="value">${fmt.money(cpl)}</div></div>
+    <div class="kpi"><div class="label">Cost per Booking</div><div class="value">${fmt.money(cpb)}</div></div>
+  `;
+}
+
+function renderTable(keys) {
+  const tbody = document.getElementById('channelTbody');
+  const tfoot = document.getElementById('channelTfoot');
+  let totals = { spend: 0, revenue: 0, leads: 0, booked: 0 };
+  const isSingle = keys.length === 1;
+  const monthKey = keys[0];
+
+  const rows = CHANNELS.map(ch => {
+    const a = aggregate(ch.id, keys);
+    totals.spend   += a.spend;
+    totals.revenue += a.revenue;
+    totals.leads   += a.leads;
+    totals.booked  += a.booked;
+
+    const src = isSingle ? DATA[ch.id]?.[monthKey]?.source : null;
+    const srcBadge = src && src !== 'manual' ? `<span class="source-badge">${src}</span>` : '';
+
+    const spendCell = editMode && isSingle
+      ? `<td class="editable"><input type="number" value="${DATA[ch.id][monthKey].spend}" onchange="updateCell('${ch.id}','${monthKey}','spend',this.value)"/></td>`
+      : `<td>${fmt.money(a.spend)}</td>`;
+    const revCell = editMode && isSingle
+      ? `<td class="editable"><input type="number" value="${DATA[ch.id][monthKey].revenue}" onchange="updateCell('${ch.id}','${monthKey}','revenue',this.value)"/></td>`
+      : `<td>${fmt.money(a.revenue)}</td>`;
+    const leadsCell = editMode && isSingle
+      ? `<td><input type="number" value="${DATA[ch.id][monthKey].leads}" onchange="updateCell('${ch.id}','${monthKey}','leads',this.value)" style="background:transparent;border:none;border-bottom:1px solid var(--accent);color:var(--text);width:60px;text-align:right;font-size:13px"/></td>`
+      : `<td>${fmt.num(a.leads)}</td>`;
+    const bookedCell = editMode && isSingle
+      ? `<td><input type="number" value="${DATA[ch.id][monthKey].booked}" onchange="updateCell('${ch.id}','${monthKey}','booked',this.value)" style="background:transparent;border:none;border-bottom:1px solid var(--accent);color:var(--text);width:60px;text-align:right;font-size:13px"/></td>`
+      : `<td>${fmt.num(a.booked)}</td>`;
+
+    return `<tr>
+      <td><span class="channel-dot" style="background:${ch.color}"></span>${ch.name}${srcBadge}</td>
+      ${spendCell}${revCell}
+      <td>${roasBadge(a.roas)}</td>
+      ${leadsCell}${bookedCell}
+      <td>${a.cr !== null ? fmt.pct(a.cr) : '—'}</td>
+      <td>${a.cpl !== null ? fmt.money(a.cpl) : '—'}</td>
+      <td>${a.cpb !== null ? fmt.money(a.cpb) : '—'}</td>
+    </tr>`;
+  });
+
+  tbody.innerHTML = rows.join('');
+
+  const tr = totals.spend > 0 ? totals.revenue / totals.spend : 0;
+  tfoot.innerHTML = `<tr style="font-weight:700;border-top:2px solid var(--border);background:var(--surface)">
+    <td>TOTAL</td>
+    <td style="text-align:right">${fmt.money(totals.spend)}</td>
+    <td style="text-align:right">${fmt.money(totals.revenue)}</td>
+    <td style="text-align:right">${roasBadge(tr)}</td>
+    <td style="text-align:right">${fmt.num(totals.leads)}</td>
+    <td style="text-align:right">${fmt.num(totals.booked)}</td>
+    <td style="text-align:right">${totals.leads > 0 ? fmt.pct(totals.booked / totals.leads) : '—'}</td>
+    <td style="text-align:right">${totals.leads > 0 ? fmt.money(totals.spend / totals.leads) : '—'}</td>
+    <td style="text-align:right">${totals.booked > 0 ? fmt.money(totals.spend / totals.booked) : '—'}</td>
+  </tr>`;
+}
+
+function renderCharts(keys) {
+  const labels = CHANNELS.map(c => c.name.length > 14 ? c.name.slice(0, 14) + '…' : c.name);
+  const spendData   = CHANNELS.map(ch => aggregate(ch.id, keys).spend);
+  const revenueData = CHANNELS.map(ch => aggregate(ch.id, keys).revenue);
+  const colors = CHANNELS.map(c => c.color);
+
+  if (charts.revenue) charts.revenue.destroy();
+  charts.revenue = new Chart(document.getElementById('revenueChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Ad Spend', data: spendData,   backgroundColor: colors.map(c => c + '66'), borderColor: colors, borderWidth: 1.5 },
+        { label: 'Revenue',  data: revenueData, backgroundColor: colors.map(c => c + '33'), borderColor: colors, borderWidth: 1.5 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#7b82a8', font: { size: 12 } } } },
+      scales: {
+        x: { ticks: { color: '#7b82a8', font: { size: 10 } }, grid: { color: '#ffffff08' } },
+        y: { ticks: { color: '#7b82a8', callback: v => '$' + v.toLocaleString(), font: { size: 10 } }, grid: { color: '#ffffff08' } },
+      },
+    },
+  });
+
+  const roasData = CHANNELS.map(ch => {
+    const a = aggregate(ch.id, keys);
+    return a.spend > 0 ? parseFloat((a.revenue / a.spend).toFixed(2)) : null;
+  });
+
+  if (charts.roas) charts.roas.destroy();
+  charts.roas = new Chart(document.getElementById('roasChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'ROAS',
+        data: roasData,
+        backgroundColor: roasData.map(r => r >= 5 ? '#38c9a888' : r >= 3 ? '#4f6ef788' : r >= 1.5 ? '#f7a84f88' : '#f75a5a88'),
+        borderColor:     roasData.map(r => r >= 5 ? '#38c9a8'   : r >= 3 ? '#4f6ef7'   : r >= 1.5 ? '#f7a84f'   : '#f75a5a'),
+        borderWidth: 1.5,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#7b82a8', callback: v => v + 'x', font: { size: 10 } }, grid: { color: '#ffffff08' } },
+        y: { ticks: { color: '#7b82a8', font: { size: 10 } }, grid: { color: '#ffffff08' } },
+      },
+    },
+  });
+
+  const topChannels = ['google_ads', 'lsa_1', 'website'];
+  const trendDatasets = topChannels.map(id => {
+    const ch = CHANNELS.find(c => c.id === id);
+    return {
+      label: ch?.name || id,
+      data: MONTHS.map(({ key }) => {
+        const d = DATA[id]?.[key];
+        return d && d.spend > 0 ? parseFloat((d.revenue / d.spend).toFixed(2)) : null;
+      }),
+      borderColor: ch?.color || '#888',
+      backgroundColor: (ch?.color || '#888') + '22',
+      tension: 0.4, pointRadius: 4, fill: false, borderWidth: 2,
+    };
+  });
+
+  trendDatasets.unshift({
+    label: 'Blended ROAS',
+    data: MONTHS.map(({ key }) => {
+      let s = 0, r = 0;
+      CHANNELS.forEach(ch => { const d = DATA[ch.id]?.[key]; if (d) { s += d.spend; r += d.revenue; } });
+      return s > 0 ? parseFloat((r / s).toFixed(2)) : null;
+    }),
+    borderColor: '#ffffff', backgroundColor: '#ffffff11',
+    tension: 0.4, pointRadius: 5, fill: false, borderWidth: 2.5, borderDash: [6, 3],
+  });
+
+  if (charts.trend) charts.trend.destroy();
+  charts.trend = new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: { labels: MONTHS.map(m => m.label), datasets: trendDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#7b82a8', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#7b82a8', font: { size: 10 } }, grid: { color: '#ffffff08' } },
+        y: { ticks: { color: '#7b82a8', callback: v => v + 'x', font: { size: 10 } }, grid: { color: '#ffffff08' } },
+      },
+    },
+  });
+}
+
+function renderInsights(keys) {
+  const insights = [];
+  const stats = CHANNELS.map(ch => ({ ...ch, ...aggregate(ch.id, keys) }));
+  const paid    = stats.filter(c => c.group_type === 'paid' && c.spend > 0);
+  const vendors = stats.filter(c => c.group_type === 'vendor');
+
+  const best = [...stats].filter(c => c.roas !== null).sort((a, b) => b.roas - a.roas)[0];
+  if (best) insights.push({ type: 'good', title: `🏆 Top Performer: ${best.name}`, body: `${fmt.roas(best.roas)} ROAS — highest return. Revenue: ${fmt.money(best.revenue)} on ${fmt.money(best.spend)} spend.` });
+
+  const worst = paid.filter(c => c.roas !== null).sort((a, b) => a.roas - b.roas)[0];
+  if (worst && worst.roas < 2) insights.push({ type: 'bad', title: `⚠️ Low ROAS: ${worst.name}`, body: `${fmt.roas(worst.roas)} ROAS — consider reducing budget or reviewing targeting. Spending ${fmt.money(worst.spend)} to generate ${fmt.money(worst.revenue)}.` });
+
+  const highCPL = stats.filter(c => c.cpl !== null && c.cpl > 200).sort((a, b) => b.cpl - a.cpl)[0];
+  if (highCPL) insights.push({ type: 'warn', title: `💸 High Cost per Lead: ${highCPL.name}`, body: `${fmt.money(highCPL.cpl)} per lead — review ad creative or lead quality settings.` });
+
+  const website = stats.find(c => c.id === 'website');
+  if (website?.revenue > 0) {
+    const paidRev = paid.reduce((s, c) => s + c.revenue, 0);
+    const share = website.revenue / (website.revenue + paidRev);
+    if (share > 0.2) insights.push({ type: 'info', title: `🌱 Strong Organic Presence`, body: `Website/organic is ${fmt.pct(share)} of revenue — healthy brand authority. Invest in SEO to grow this.` });
+  }
+
+  const vendorRev   = vendors.reduce((s, c) => s + c.revenue, 0);
+  const vendorSpend = vendors.reduce((s, c) => s + c.spend, 0);
+  if (vendorSpend > 0) {
+    const vRoas = vendorRev / vendorSpend;
+    if (vRoas < 3) insights.push({ type: 'warn', title: `📦 Vendor Channels Underperforming`, body: `Combined vendor ROAS is ${fmt.roas(vRoas)}. Re-negotiate rates or shift budget to higher-ROAS channels.` });
+    else insights.push({ type: 'good', title: `📦 Vendor Channels Efficient`, body: `Combined vendor ROAS is ${fmt.roas(vRoas)} — solid return. Consider increasing volume with top vendor.` });
+  }
+
+  const lsas = stats.filter(c => ['lsa_1', 'lsa_2', 'lsa_3'].includes(c.id) && c.roas !== null).sort((a, b) => b.roas - a.roas);
+  if (lsas.length > 1) {
+    const gap = lsas[0].roas - lsas[lsas.length - 1].roas;
+    if (gap > 1) insights.push({ type: 'info', title: `📊 LSA Account Disparity`, body: `${lsas[0].name} (${fmt.roas(lsas[0].roas)}) outperforms ${lsas[lsas.length - 1].name} (${fmt.roas(lsas[lsas.length - 1].roas)}) by ${fmt.roas(gap)}. Review geo-targeting and review scores.` });
+  }
+
+  let tl = 0, tb = 0;
+  CHANNELS.forEach(ch => { const a = aggregate(ch.id, keys); tl += a.leads; tb += a.booked; });
+  const cr = tl > 0 ? tb / tl : 0;
+  if (cr < 0.15) insights.push({ type: 'bad', title: `📞 Low Overall Close Rate`, body: `${fmt.pct(cr)} — industry average is 20–30%. Review follow-up speed and sales scripts.` });
+  else if (cr > 0.25) insights.push({ type: 'good', title: `📞 Strong Close Rate`, body: `${fmt.pct(cr)} overall close rate — above industry average.` });
+
+  document.getElementById('insightsList').innerHTML = insights.map(ins =>
+    `<div class="insight ${ins.type}"><div class="i-title">${ins.title}</div><div class="i-body">${ins.body}</div></div>`
+  ).join('');
+}
+
+// ─── EDIT MODE ────────────────────────────────────────────────────────────────
+function toggleEdit() {
+  editMode = !editMode;
+  const btn = document.getElementById('editBtn');
+  btn.textContent = editMode ? '💾 Done Editing' : '✏️ Edit Data';
+  btn.classList.toggle('active', editMode);
+  document.getElementById('editHint').textContent = editMode
+    ? 'Select a single month. Changes save to database automatically.'
+    : '';
+  render();
+}
+
+async function updateCell(channelId, month, field, value) {
+  const current = DATA[channelId][month];
+  current[field] = parseFloat(value) || 0;
+  // Debounce-free: save immediately (inputs fire on change, not keyup)
+  try {
+    await apiPut(`/metrics/${channelId}/${month}`, current);
+  } catch (e) {
+    console.error('Save failed:', e);
+  }
+  renderKPIs(getMonthKeys());
+  renderInsights(getMonthKeys());
+}
+
+// ─── EXPORT ───────────────────────────────────────────────────────────────────
+function exportCSV() {
+  const keys = getMonthKeys();
+  const header = ['Channel', 'Spend', 'Revenue', 'ROAS', 'Leads', 'Booked', 'Close Rate', 'CPL', 'CPB'];
+  const rows = CHANNELS.map(ch => {
+    const a = aggregate(ch.id, keys);
+    return [ch.name, a.spend, a.revenue, a.roas?.toFixed(2) ?? '', a.leads, a.booked,
+      a.cr ? (a.cr * 100).toFixed(1) + '%' : '', a.cpl?.toFixed(0) ?? '', a.cpb?.toFixed(0) ?? ''].join(',');
+  });
+  const csv = [header.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'safebound_roas_export.csv';
+  a.click();
+}
+
+// ─── SYNC PANEL ───────────────────────────────────────────────────────────────
+function openSync() {
+  document.getElementById('syncPanel').classList.add('open');
+  loadSyncLogs();
+}
+function closeSync() { document.getElementById('syncPanel').classList.remove('open'); }
+
+async function triggerSync(source, btn) {
+  const statusEl = document.getElementById(`status-${source}`);
+  btn.disabled = true;
+  statusEl.className = 'sync-status running';
+  statusEl.textContent = 'Running…';
+
+  try {
+    const { logId } = await (await fetch(`/api/sync/${source}`, { method: 'POST' })).json();
+    pollSyncLog(logId, source, btn, statusEl);
+  } catch (e) {
+    statusEl.className = 'sync-status error';
+    statusEl.textContent = 'Failed to start: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function pollSyncLog(logId, source, btn, statusEl) {
+  const poll = async () => {
+    try {
+      const log = await apiGet(`/sync/logs/${logId}`);
+      if (log.status === 'running') {
+        setTimeout(poll, 2000);
+      } else {
+        statusEl.className = `sync-status ${log.status}`;
+        statusEl.textContent = log.status === 'success'
+          ? `✓ ${log.message}`
+          : `✗ ${log.message}`;
+        btn.disabled = false;
+        if (log.status === 'success') { await loadData(); }
+        loadSyncLogs();
+      }
+    } catch (e) {
+      statusEl.className = 'sync-status error';
+      statusEl.textContent = 'Poll error: ' + e.message;
+      btn.disabled = false;
+    }
+  };
+  poll();
+}
+
+async function loadSyncLogs() {
+  const el = document.getElementById('syncLogs');
+  try {
+    const logs = await apiGet('/sync/logs');
+    if (!logs.length) { el.innerHTML = '<div style="color:var(--muted);font-size:12px">No syncs yet.</div>'; return; }
+    el.innerHTML = logs.slice(0, 20).map(log => {
+      const ts = new Date(log.started_at).toLocaleString();
+      const icon = log.status === 'success' ? '✓' : log.status === 'running' ? '⟳' : '✗';
+      const color = log.status === 'success' ? 'var(--green)' : log.status === 'running' ? 'var(--warn)' : 'var(--red)';
+      return `<div class="log-entry">
+        <span class="log-source">${log.source}</span>
+        <span style="color:${color};margin-left:6px">${icon}</span>
+        <div class="log-msg">${log.message || log.status}</div>
+        <div class="log-time">${ts}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--red);font-size:12px">Failed to load logs.</div>';
+  }
+}
+
+document.getElementById('periodSelect').addEventListener('change', render);
+
+// Boot
+loadData();
+</script>
+</body>
+</html>
