@@ -50,7 +50,7 @@
     <div>
       <input id="fileInput" type="file" multiple style="display:none" onchange="uploadInvoices(this.files)"/>
       <button class="primary" onclick="document.getElementById('fileInput').click()">Upload Invoice</button>
-      <button onclick="reconcileInvoices()">Apply Approved Spend</button>
+      <button onclick="reconcileInvoices()">Recalculate Approved Spend</button>
       <button onclick="loadInvoices()">Refresh</button>
     </div>
   </div>
@@ -186,11 +186,11 @@ async function approveInvoice(id) {
 }
 
 async function reconcileInvoices() {
-  setStatus('Applying approved invoice spend...', 'running');
+  setStatus('Recalculating approved invoice spend...', 'running');
   try {
     const result = await apiPost('/invoices/reconcile', {});
     await loadInvoices();
-    setStatus(`Applied ${result.applied} approved invoice${result.applied === 1 ? '' : 's'} to spend.`, 'success');
+    setStatus(`Recalculated ${result.applied} invoice spend group${result.applied === 1 ? '' : 's'}.`, 'success');
   } catch (e) {
     setStatus('Apply failed: ' + e.message, 'error');
   }
