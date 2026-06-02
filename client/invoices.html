@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Safebound Invoice Inbox</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --card: #21253a; --border: #2e3450;
+    --accent: #4f6ef7; --green: #38c9a8; --warn: #f7a84f; --red: #f75a5a;
+    --text: #e8eaf6; --muted: #7b82a8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 28px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+  h1 { margin: 0; font-size: 20px; }
+  a { color: var(--green); text-decoration: none; }
+  main { max-width: 1400px; margin: 0 auto; padding: 24px 28px; }
+  button, input, select { background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: var(--accent); border-color: var(--accent); }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .status { color: var(--muted); font-size: 13px; }
+  .status.success { color: var(--green); }
+  .status.error { color: var(--red); }
+  .status.running { color: var(--warn); }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  td { text-align: right; padding: 9px 10px; border-bottom: 1px solid #ffffff08; white-space: nowrap; }
+  td input, td select { width: 100%; min-width: 110px; padding: 6px 8px; background: var(--surface); }
+  .amount { text-align: right; min-width: 90px; }
+  .pill { display: inline-block; border-radius: 20px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
+  .pill.needs_review { background: #f7a84f20; color: var(--warn); }
+  .pill.approved { background: #38c9a820; color: var(--green); }
+  .empty { background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Invoice Inbox</h1>
+  <a href="/">Back to ROAS Dashboard</a>
+</header>
+
+<main>
+  <div class="toolbar">
+    <div class="status" id="status">Upload invoices, review fields, then approve spend into ROAS.</div>
+    <div>
+      <input id="fileInput" type="file" multiple style="display:none" onchange="uploadInvoices(this.files)"/>
+      <button class="primary" onclick="document.getElementById('fileInput').click()">Upload Invoice</button>
+      <button onclick="loadInvoices()">Refresh</button>
+    </div>
+  </div>
+
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Vendor</th>
+            <th>Invoice #</th>
+            <th>Date</th>
+            <th>Month</th>
+            <th>Channel</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="invoiceTbody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+let CHANNELS = [];
+let INVOICES = [];
+
+async function apiGet(path) {
+  const res = await fetch('/api' + path);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function apiPut(path, body) {
+  const res = await fetch('/api' + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch('/api' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function setStatus(message, state = '') {
+  const el = document.getElementById('status');
+  el.textContent = message;
+  el.className = `status ${state}`;
+}
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadInvoices(files) {
+  const selected = Array.from(files || []);
+  if (!selected.length) return;
+  setStatus(`Uploading ${selected.length} file${selected.length > 1 ? 's' : ''}...`, 'running');
+  try {
+    for (const file of selected) {
+      await apiPost('/invoices', {
+        fileName: file.name,
+        mimeType: file.type,
+        contentBase64: await fileToBase64(file),
+      });
+    }
+    document.getElementById('fileInput').value = '';
+    await loadInvoices();
+    setStatus('Upload complete. Review fields before approving.', 'success');
+  } catch (e) {
+    setStatus('Upload failed: ' + e.message, 'error');
+  }
+}
+
+function channelOptions(selected) {
+  return ['<option value="">Select</option>'].concat(CHANNELS.map(ch =>
+    `<option value="${escapeHtml(ch.id)}" ${ch.id === selected ? 'selected' : ''}>${escapeHtml(ch.name)}</option>`
+  )).join('');
+}
+
+async function updateField(id, field, value) {
+  const invoice = INVOICES.find(item => item.id === id);
+  if (!invoice) return;
+  invoice[field] = value;
+  if (field === 'invoiceDate' && !invoice.month && value) invoice.month = value.slice(0, 7);
+  try {
+    await apiPut(`/invoices/${id}`, invoice);
+  } catch (e) {
+    setStatus('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function approveInvoice(id) {
+  const invoice = INVOICES.find(item => item.id === id);
+  if (!invoice) return;
+  if (!invoice.vendor || !invoice.month || !invoice.channelId || !invoice.amount) {
+    setStatus('Vendor, month, channel, and amount are required before approval.', 'error');
+    return;
+  }
+  try {
+    await apiPost(`/invoices/${id}/approve`, invoice);
+    await loadInvoices();
+    setStatus('Invoice approved and added to channel spend.', 'success');
+  } catch (e) {
+    setStatus('Approval failed: ' + e.message, 'error');
+  }
+}
+
+function renderInvoices() {
+  const tbody = document.getElementById('invoiceTbody');
+  if (!INVOICES.length) {
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty">No invoices yet. Upload one to start the queue.</div></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = INVOICES.map(inv => {
+    const approved = inv.status === 'approved';
+    return `<tr>
+      <td><a href="/api/invoices/${inv.id}/file" target="_blank">${escapeHtml(inv.originalFileName || 'Invoice')}</a></td>
+      <td><input value="${escapeHtml(inv.vendor || '')}" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','vendor',this.value)"/></td>
+      <td><input value="${escapeHtml(inv.invoiceNumber || '')}" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','invoiceNumber',this.value)"/></td>
+      <td><input type="date" value="${escapeHtml(inv.invoiceDate || '')}" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','invoiceDate',this.value)"/></td>
+      <td><input value="${escapeHtml(inv.month || '')}" placeholder="YYYY-MM" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','month',this.value)"/></td>
+      <td><select ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','channelId',this.value)">${channelOptions(inv.channelId)}</select></td>
+      <td><input class="amount" type="number" step="0.01" value="${inv.amount ?? ''}" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','amount',this.value)"/></td>
+      <td><span class="pill ${inv.status}">${approved ? 'Approved' : 'Needs review'}</span></td>
+      <td>${approved ? '-' : `<button class="primary" onclick="approveInvoice('${inv.id}')">Approve</button>`}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadInvoices() {
+  try {
+    [CHANNELS, INVOICES] = await Promise.all([
+      apiGet('/metrics/channels'),
+      apiGet('/invoices'),
+    ]);
+    renderInvoices();
+  } catch (e) {
+    setStatus('Could not load invoices: ' + e.message, 'error');
+  }
+}
+
+loadInvoices();
+</script>
+</body>
+</html>
