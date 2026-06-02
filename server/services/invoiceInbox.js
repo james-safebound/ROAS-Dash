@@ -140,11 +140,13 @@ async function updateInvoice(id, patch) {
   invoices[index] = {
     ...invoices[index],
     ...patch,
-    amount: patch.amount === '' || patch.amount === null || patch.amount === undefined
-      ? null
-      : Number(patch.amount),
     updatedAt: new Date().toISOString(),
   };
+  if (Object.prototype.hasOwnProperty.call(patch, 'amount')) {
+    invoices[index].amount = patch.amount === '' || patch.amount === null || patch.amount === undefined
+      ? null
+      : Number(patch.amount);
+  }
   await writeInvoices(invoices);
   return invoices[index];
 }
