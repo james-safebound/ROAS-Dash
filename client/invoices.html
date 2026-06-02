@@ -50,6 +50,7 @@
     <div>
       <input id="fileInput" type="file" multiple style="display:none" onchange="uploadInvoices(this.files)"/>
       <button class="primary" onclick="document.getElementById('fileInput').click()">Upload Invoice</button>
+      <button onclick="reconcileInvoices()">Apply Approved Spend</button>
       <button onclick="loadInvoices()">Refresh</button>
     </div>
   </div>
@@ -184,6 +185,17 @@ async function approveInvoice(id) {
   }
 }
 
+async function reconcileInvoices() {
+  setStatus('Applying approved invoice spend...', 'running');
+  try {
+    const result = await apiPost('/invoices/reconcile', {});
+    await loadInvoices();
+    setStatus(`Applied ${result.applied} approved invoice${result.applied === 1 ? '' : 's'} to spend.`, 'success');
+  } catch (e) {
+    setStatus('Apply failed: ' + e.message, 'error');
+  }
+}
+
 function renderInvoices() {
   const tbody = document.getElementById('invoiceTbody');
   if (!INVOICES.length) {
@@ -201,7 +213,7 @@ function renderInvoices() {
       <td><input value="${escapeHtml(inv.month || '')}" placeholder="YYYY-MM" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','month',this.value)"/></td>
       <td><select ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','channelId',this.value)">${channelOptions(inv.channelId)}</select></td>
       <td><input class="amount" type="number" step="0.01" value="${inv.amount ?? ''}" ${approved ? 'disabled' : ''} onchange="updateField('${inv.id}','amount',this.value)"/></td>
-      <td><span class="pill ${inv.status}">${approved ? 'Approved' : 'Needs review'}</span></td>
+      <td><span class="pill ${inv.status}">${approved ? (inv.metricsAppliedAt ? 'Approved' : 'Approved, not applied') : 'Needs review'}</span></td>
       <td>${approved ? '-' : `<button class="primary" onclick="approveInvoice('${inv.id}')">Approve</button>`}</td>
     </tr>`;
   }).join('');
