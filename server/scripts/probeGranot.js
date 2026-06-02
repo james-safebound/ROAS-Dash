@@ -2,7 +2,8 @@ require('dotenv').config();
 
 const { probe } = require('../services/granot');
 
-const monthsBack = parseInt(process.argv[2], 10) || 1;
+const parsedMonthsBack = parseInt(process.argv[2], 10);
+const monthsBack = Number.isNaN(parsedMonthsBack) ? 1 : parsedMonthsBack;
 
 probe(monthsBack)
   .then(result => {
