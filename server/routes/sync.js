@@ -3,10 +3,9 @@ const router = express.Router();
 const supabase = require('../db/supabase');
 const googleAds = require('../services/googleAds');
 const lsa = require('../services/lsa');
-const granot = require('../services/granot');
 const invoiceParser = require('../services/invoiceParser');
 
-const SOURCES = { 'google-ads': googleAds, lsa, granot, invoices: invoiceParser };
+const SOURCES = { 'google-ads': googleAds, lsa, invoices: invoiceParser };
 
 async function startLog(source) {
   const { data } = await supabase
