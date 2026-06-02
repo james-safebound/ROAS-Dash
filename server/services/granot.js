@@ -36,8 +36,15 @@ function lastOfMonth(year, month) {
   return `${String(month).padStart(2,'0')}/${last}/${year}`;
 }
 
+function formatDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${month}/${day}/${date.getFullYear()}`;
+}
+
 const BASE_URL = 'https://ant.hellomoving.com';
 const WC_URL = process.env.GRANOT_WC_URL || 'https://ant.hellomoving.com/wc.dll?mp~hellonet~SAFEBOUND';
+const DEFAULT_START_DATE = process.env.GRANOT_START_DATE || '2025-07-01';
 const DEBUG_DIR = process.env.GRANOT_DEBUG_DIR || '/tmp/granot-debug';
 const DEBUG_ENABLED = process.env.GRANOT_DEBUG !== 'false';
 
@@ -47,6 +54,10 @@ function sleep(ms) {
 
 function normalizeText(text = '') {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeHeader(text = '') {
+  return normalizeText(text).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 async function saveDebug(page, name) {
@@ -70,6 +81,39 @@ async function waitForQuietNavigation(page, action, timeout = 30000) {
 
 function sessionGuidFromUrl(url) {
   return url.match(/~([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/i)?.[1] || null;
+}
+
+function monthlyPeriodsSince(startDateString = DEFAULT_START_DATE, endDate = new Date()) {
+  const start = new Date(`${startDateString}T00:00:00`);
+  if (Number.isNaN(start.getTime())) {
+    throw new Error(`Invalid GRANOT_START_DATE: ${startDateString}`);
+  }
+
+  const periods = [];
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  const finalMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+
+  while (cursor <= finalMonth) {
+    const year = cursor.getFullYear();
+    const month = cursor.getMonth() + 1;
+    const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+    const periodStart = cursor.getTime() === new Date(start.getFullYear(), start.getMonth(), 1).getTime()
+      ? start
+      : new Date(year, month - 1, 1);
+    const periodEnd = cursor.getTime() === finalMonth.getTime()
+      ? endDate
+      : new Date(year, month, 0);
+
+    periods.push({
+      monthKey,
+      fromDate: formatDate(periodStart),
+      toDate: formatDate(periodEnd),
+    });
+
+    cursor = new Date(year, month, 1);
+  }
+
+  return periods;
 }
 
 async function fillInput(page, selector, value) {
@@ -158,7 +202,20 @@ async function gotoReportsMenu(page) {
 }
 
 async function gotoLeadsAdvertising(page) {
-  await clickByText(page, 'Leads & Advertising', '05-leads-advertising');
+  const targetUrl = await page.evaluate(() => {
+    const scripts = [...document.querySelectorAll('script')].map(s => s.textContent).join('\n');
+    const match = scripts.match(/if\s*\(i\s*==\s*10\)\s*window\.location\.href=\(['"]([^'"]+)['"]\)/);
+    return match ? match[1] : null;
+  });
+
+  if (targetUrl) {
+    const fullUrl = targetUrl.startsWith('http') ? targetUrl : `${BASE_URL}${targetUrl}`;
+    await page.goto(fullUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await saveDebug(page, '05-leads-advertising-direct');
+    return;
+  }
+
+  await clickByText(page, 'Leads & Advertising', '05-leads-advertising-clicked');
 }
 
 async function setInputValue(page, selector, value) {
@@ -179,13 +236,11 @@ async function setDateRange(page, fromDate, toDate) {
   }
 }
 
-async function scrapeMonth(page, year, month) {
+async function scrapePeriod(page, period) {
   await gotoReportsMenu(page);
   await gotoLeadsAdvertising(page);
 
-  const fromDate = firstOfMonth(year, month);
-  const toDate   = lastOfMonth(year, month);
-  await setDateRange(page, fromDate, toDate);
+  await setDateRange(page, period.fromDate, period.toDate);
   await saveDebug(page, '06-date-range-set');
 
   await clickByText(page, 'All Leads', '07-all-leads-report');
@@ -283,19 +338,14 @@ async function collectMetrics(monthsBack = 3) {
     await userLogin(page);
     await saveDebug(page, '03-after-user-login');
 
-    // Step 3: Scrape last N months
     const allRows = [];
-    const now = new Date();
+    const periods = monthlyPeriodsSince(DEFAULT_START_DATE);
+    const selectedPeriods = monthsBack ? periods.slice(-monthsBack) : periods;
 
-    for (let i = 0; i < monthsBack; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const year  = d.getFullYear();
-      const month = d.getMonth() + 1;
-      const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-
-      console.log(`[granot] Scraping ${monthKey}...`);
-      const rows = await scrapeMonth(page, year, month);
-      allRows.push(...aggregateRows(rows, monthKey));
+    for (const period of selectedPeriods) {
+      console.log(`[granot] Scraping ${period.monthKey} (${period.fromDate} - ${period.toDate})...`);
+      const rows = await scrapePeriod(page, period);
+      allRows.push(...aggregateRows(rows, period.monthKey));
     }
 
     return allRows;
@@ -314,7 +364,7 @@ async function probe(monthsBack = 1) {
   };
 }
 
-async function sync(monthsBack = 3) {
+async function sync(monthsBack = 0) {
   console.log('[granot] Starting sync');
   const allRows = await collectMetrics(monthsBack);
 
