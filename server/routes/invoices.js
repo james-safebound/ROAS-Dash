@@ -30,6 +30,11 @@ router.put('/:id', async (req, res) => {
 
 router.post('/:id/approve', async (req, res) => {
   try {
+    const current = await invoiceInbox.getInvoice(req.params.id);
+    if (current.status === 'approved') {
+      return res.json(current);
+    }
+
     const invoice = await invoiceInbox.updateInvoice(req.params.id, {
       ...req.body,
       status: 'approved',
