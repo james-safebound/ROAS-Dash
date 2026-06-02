@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon server/index.js",
-    "probe:granot": "node server/scripts/probeGranot.js"
+    "probe:granot": "node server/scripts/probeGranot.js",
+    "probe:lsa": "node server/scripts/probeLsa.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
