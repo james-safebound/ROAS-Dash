@@ -3,30 +3,21 @@ const router = express.Router();
 const supabase = require('../db/supabase');
 const invoiceInbox = require('../services/invoiceInbox');
 
-async function applyInvoiceSpend(invoice) {
-  if (!invoice.channelId || !invoice.month || invoice.amount === null || invoice.amount === undefined) {
-    throw new Error('Vendor invoice must have channel, month, and amount before approval');
-  }
-
-  if (invoice.metricsAppliedAt) {
-    return invoice;
-  }
-
+async function writeInvoiceSpend(channelId, month, spend) {
   const { data: existing, error: readError } = await supabase
     .from('channel_metrics')
-    .select('spend, revenue, leads, booked')
-    .eq('channel_id', invoice.channelId)
-    .eq('month', invoice.month)
+    .select('revenue, leads, booked')
+    .eq('channel_id', channelId)
+    .eq('month', month)
     .maybeSingle();
   if (readError) throw new Error(readError.message);
 
-  const currentSpend = Number(existing?.spend || 0);
   const { error: writeError } = await supabase
     .from('channel_metrics')
     .upsert({
-      channel_id: invoice.channelId,
-      month: invoice.month,
-      spend: currentSpend + Number(invoice.amount || 0),
+      channel_id: channelId,
+      month,
+      spend,
       revenue: Number(existing?.revenue || 0),
       leads: Number(existing?.leads || 0),
       booked: Number(existing?.booked || 0),
@@ -34,10 +25,38 @@ async function applyInvoiceSpend(invoice) {
       updated_at: new Date().toISOString(),
     }, { onConflict: 'channel_id,month' });
   if (writeError) throw new Error(writeError.message);
+}
 
-  return invoiceInbox.updateInvoice(invoice.id, {
-    metricsAppliedAt: new Date().toISOString(),
-  });
+async function reconcileApprovedInvoiceSpend() {
+  const invoices = await invoiceInbox.listInvoices();
+  const approved = invoices.filter(invoice => invoice.status === 'approved');
+  const spendByChannelMonth = new Map();
+
+  for (const invoice of approved) {
+    if (!invoice.channelId || !invoice.month || invoice.amount === null || invoice.amount === undefined) {
+      throw new Error(`Approved invoice ${invoice.invoiceNumber || invoice.id} is missing channel, month, or amount`);
+    }
+
+    const key = `${invoice.channelId}__${invoice.month}`;
+    spendByChannelMonth.set(key, (spendByChannelMonth.get(key) || 0) + Number(invoice.amount || 0));
+  }
+
+  for (const [key, spend] of spendByChannelMonth.entries()) {
+    const [channelId, month] = key.split('__');
+    await writeInvoiceSpend(channelId, month, spend);
+  }
+
+  const marked = [];
+  for (const invoice of approved) {
+    marked.push(await invoiceInbox.updateInvoice(invoice.id, {
+      metricsAppliedAt: new Date().toISOString(),
+    }));
+  }
+
+  return {
+    applied: spendByChannelMonth.size,
+    invoices: marked,
+  };
 }
 
 router.get('/', async (req, res) => {
@@ -67,18 +86,7 @@ router.put('/:id', async (req, res) => {
 
 router.post('/reconcile', async (req, res) => {
   try {
-    const invoices = await invoiceInbox.listInvoices();
-    const approved = invoices.filter(invoice => invoice.status === 'approved' && !invoice.metricsAppliedAt);
-    const applied = [];
-
-    for (const invoice of approved) {
-      applied.push(await applyInvoiceSpend(invoice));
-    }
-
-    res.json({
-      applied: applied.length,
-      invoices: applied,
-    });
+    res.json(await reconcileApprovedInvoiceSpend());
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -92,13 +100,12 @@ router.post('/:id/approve', async (req, res) => {
     }
 
     const draft = { ...current, ...req.body };
-    await applyInvoiceSpend(draft);
-
     const invoice = await invoiceInbox.updateInvoice(req.params.id, {
       ...draft,
       status: 'approved',
       approvedAt: draft.approvedAt || new Date().toISOString(),
     });
+    await reconcileApprovedInvoiceSpend();
 
     res.json(invoice);
   } catch (err) {
