@@ -5,6 +5,8 @@
  * scrapes the table for a given month, and upserts into Supabase.
  */
 const puppeteer = require('puppeteer');
+const fs = require('fs/promises');
+const path = require('path');
 const supabase = require('../db/supabase');
 
 // Maps Granot advertiser names → our channel IDs.
@@ -34,7 +36,41 @@ function lastOfMonth(year, month) {
   return `${String(month).padStart(2,'0')}/${last}/${year}`;
 }
 
-const WC_URL = 'https://ant.hellomoving.com/wc.dll?mp~hellonet~SAFEBOUND';
+const BASE_URL = 'https://ant.hellomoving.com';
+const WC_URL = process.env.GRANOT_WC_URL || 'https://ant.hellomoving.com/wc.dll?mp~hellonet~SAFEBOUND';
+const DEBUG_DIR = process.env.GRANOT_DEBUG_DIR || '/tmp/granot-debug';
+const DEBUG_ENABLED = process.env.GRANOT_DEBUG !== 'false';
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeText(text = '') {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+async function saveDebug(page, name) {
+  if (!DEBUG_ENABLED) return;
+  await fs.mkdir(DEBUG_DIR, { recursive: true });
+  await page.screenshot({ path: path.join(DEBUG_DIR, `${name}.png`), fullPage: true });
+  await fs.writeFile(path.join(DEBUG_DIR, `${name}.html`), await page.content());
+  await fs.writeFile(path.join(DEBUG_DIR, `${name}.url.txt`), page.url());
+}
+
+async function waitForQuietNavigation(page, action, timeout = 30000) {
+  const navigation = page.waitForNavigation({ waitUntil: 'networkidle2', timeout })
+    .catch(err => {
+      if (err.name !== 'TimeoutError') throw err;
+      return null;
+    });
+
+  await action();
+  await Promise.race([navigation, sleep(2500)]);
+}
+
+function sessionGuidFromUrl(url) {
+  return url.match(/~([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/i)?.[1] || null;
+}
 
 async function fillInput(page, selector, value) {
   await page.waitForSelector(selector, { timeout: 10000 });
@@ -57,18 +93,11 @@ async function networkLogin(page) {
   await fillInput(page, 'input[placeholder="Enter Network ID"], input[name*="network" i], input[id*="network" i]', process.env.GRANOT_NETWORK_ID);
   await fillInput(page, 'input[type="password"]', process.env.GRANOT_NETWORK_PASSWORD);
 
-  // Log actual field values and screenshot right before clicking Login
-  const fieldValues = await page.evaluate(() => {
-    const inputs = [...document.querySelectorAll('input')];
-    return inputs.map(i => ({ type: i.type, name: i.name, id: i.id, placeholder: i.placeholder, value: i.value }));
-  });
-  console.log('[granot] Fields before login click:', JSON.stringify(fieldValues, null, 2));
-  await page.screenshot({ path: '/tmp/granot_before_login_click.png', fullPage: true });
+  await saveDebug(page, '01-network-login-filled');
 
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
-    page.click('button[type="submit"], input[type="submit"], button::-p-text(Login)'),
-  ]);
+  await waitForQuietNavigation(page, () =>
+    page.click('button[type="submit"], input[type="submit"], button::-p-text(Login)')
+  );
 }
 
 async function userLogin(page) {
@@ -78,87 +107,110 @@ async function userLogin(page) {
   await fillInput(page, 'input[name*="user" i], input[id*="user" i], input[placeholder*="user" i]', process.env.GRANOT_USERNAME);
   await fillInput(page, 'input[type="password"]', process.env.GRANOT_PASSWORD);
 
-  await page.$eval('input[type="submit"], button[type="submit"]', el => el.click());
-  await new Promise(r => setTimeout(r, 2000));
+  await saveDebug(page, '02-user-login-filled');
+  await waitForQuietNavigation(page, () =>
+    page.$eval('input[type="submit"], button[type="submit"]', el => el.click())
+  );
+}
+
+async function findClickableByText(page, text) {
+  return page.evaluateHandle((targetText) => {
+    const wanted = targetText.toLowerCase();
+    const visible = el => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const candidates = [...document.querySelectorAll('a, button, input[type="button"], input[type="submit"], [onclick], td, div, span, li')]
+      .filter(visible)
+      .map(el => {
+        const label = (el.innerText || el.value || el.textContent || '').replace(/\s+/g, ' ').trim();
+        const clickable = el.closest('a, button, input[type="button"], input[type="submit"], [onclick]') || el;
+        return { el: clickable, label };
+      })
+      .filter(item => item.label.toLowerCase().includes(wanted));
+
+    return candidates[0]?.el || null;
+  }, text);
+}
+
+async function clickByText(page, text, debugName) {
+  const handle = await findClickableByText(page, text);
+  const element = handle.asElement();
+  if (!element) {
+    await saveDebug(page, `missing-${debugName}`);
+    throw new Error(`Could not find clickable text: ${text}`);
+  }
+
+  await waitForQuietNavigation(page, () => element.click());
+  await saveDebug(page, debugName);
+}
+
+async function gotoReportsMenu(page) {
+  const guid = sessionGuidFromUrl(page.url());
+  if (guid) {
+    await page.goto(`${BASE_URL}/wc.dll?mprep~repmenuwc~${guid}`, { waitUntil: 'networkidle2', timeout: 30000 });
+    await saveDebug(page, '04-reports-menu-direct');
+    return;
+  }
+
+  await clickByText(page, 'Reports', '04-reports-menu-clicked');
+}
+
+async function gotoLeadsAdvertising(page) {
+  await clickByText(page, 'Leads & Advertising', '05-leads-advertising');
+}
+
+async function setInputValue(page, selector, value) {
+  const handle = await page.$(selector);
+  if (!handle) return false;
+  await handle.click({ clickCount: 3 });
+  await handle.type(value);
+  return true;
+}
+
+async function setDateRange(page, fromDate, toDate) {
+  const setFrom = await setInputValue(page, 'input[name*="from" i], input[id*="from" i], input[name*="start" i], input[id*="start" i]', fromDate);
+  const setTo = await setInputValue(page, 'input[name*="to" i], input[id*="to" i], input[name*="end" i], input[id*="end" i]', toDate);
+
+  if (!setFrom || !setTo) {
+    await saveDebug(page, 'missing-date-inputs');
+    throw new Error(`Could not set Granot date range. from=${setFrom}, to=${setTo}`);
+  }
 }
 
 async function scrapeMonth(page, year, month) {
-  // Extract session GUID from the post-login URL
-  const guid = page.url().match(/~([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})/i)?.[1];
-  if (!guid) throw new Error('Could not extract session GUID from URL: ' + page.url());
-  console.log('[granot] Session GUID:', guid);
+  await gotoReportsMenu(page);
+  await gotoLeadsAdvertising(page);
 
-  const base = 'https://ant.hellomoving.com';
-
-  // Navigate directly to Reports menu
-  await page.goto(`${base}/wc.dll?mprep~repmenuwc~${guid}`, { waitUntil: 'networkidle2', timeout: 30000 });
-  await page.screenshot({ path: '/tmp/granot_reports_page.png', fullPage: true });
-  console.log('[granot] Reports page screenshot saved');
-
-  // Log all elements with text + onclick to find Leads & Advertising
-  const allClickable = await page.evaluate(() =>
-    [...document.querySelectorAll('[onclick], a')].map(el => ({
-      tag: el.tagName,
-      text: el.textContent.trim().slice(0, 60),
-      href: el.href || '',
-      onclick: el.getAttribute('onclick') || '',
-    }))
-  );
-  console.log('[granot] Clickable elements on reports page:', JSON.stringify(allClickable));
-
-  // submitFunction(10) = Leads & Advertising — extract the URL from the JS source
-  const leadsUrl = await page.evaluate(() => {
-    const scripts = [...document.querySelectorAll('script')].map(s => s.textContent).join('\n');
-    // Match: if (i==10) window.open('/wc.dll?...')
-    const match = scripts.match(/if\s*\(i\s*==\s*10\)\s*window\.open\(['"]([^'"]+)['"]/);
-    return match ? match[1] : null;
-  });
-  if (!leadsUrl) throw new Error('Could not find submitFunction(10) URL in page scripts');
-  const fullLeadsUrl = leadsUrl.startsWith('http') ? leadsUrl : `https://ant.hellomoving.com${leadsUrl}`;
-  console.log('[granot] Leads & Advertising URL:', fullLeadsUrl);
-
-  await page.goto(fullLeadsUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-  await page.screenshot({ path: '/tmp/granot_leads_page.png', fullPage: true });
-  console.log('[granot] Leads page screenshot saved');
-
-  // Set date range
   const fromDate = firstOfMonth(year, month);
   const toDate   = lastOfMonth(year, month);
+  await setDateRange(page, fromDate, toDate);
+  await saveDebug(page, '06-date-range-set');
 
-  const fromInput = await page.waitForSelector('input[name*="from" i], input[id*="from" i]', { timeout: 10000 });
-  await fromInput.click({ clickCount: 3 });
-  await fromInput.type(fromDate);
-
-  const toInput = await page.$('input[name*="to" i], input[id*="to" i]');
-  await toInput.click({ clickCount: 3 });
-  await toInput.type(toDate);
-
-  // Click "All Leads and Advertising"
-  const allLeadsUrl = await page.evaluate(() => {
-    const link = [...document.querySelectorAll('a')].find(a => a.textContent.trim().includes('All Le'));
-    return link ? link.href : null;
-  });
-  if (!allLeadsUrl) throw new Error('All Leads link not found');
-
-  await page.goto(allLeadsUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-  await page.screenshot({ path: '/tmp/granot_all_leads.png', fullPage: true });
-  console.log('[granot] All leads screenshot saved');
+  await clickByText(page, 'All Leads', '07-all-leads-report');
 
   // Scrape the table
   const rows = await page.evaluate(() => {
     const results = [];
-    const table = document.querySelector('table');
+    const tables = [...document.querySelectorAll('table')];
+    const table = tables.find(t => /adver|advertis|booked|job/i.test(t.innerText)) || tables[tables.length - 1];
     if (!table) return results;
 
-    const headers = [...table.querySelectorAll('thead th, tr:first-child th')]
-      .map(th => th.textContent.trim().toLowerCase());
+    const normalize = text => (text || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const headerCells = [...table.querySelectorAll('thead th, tr:first-child th, tr:first-child td')];
+    const headers = headerCells.map(th => normalize(th.textContent));
 
     // Find column indices
-    const col = name => headers.findIndex(h => h.includes(name));
-    const adverIdx    = col('adver');
-    const entryIdx    = col('entry');
-    const bookedIdx   = col('booked');
-    const jobTotalIdx = col('job_total');
+    const col = names => headers.findIndex(h => names.some(name => h.includes(name)));
+    const adverIdx    = col(['adver', 'advertis', 'source']);
+    const entryIdx    = col(['entry', 'lead', 'calls']);
+    const bookedIdx   = col(['booked', 'book']);
+    const jobTotalIdx = col(['jobtotal', 'total', 'revenue', 'amount']);
+
+    if ([adverIdx, entryIdx, bookedIdx, jobTotalIdx].some(i => i < 0)) {
+      return [{ __headerError: true, headers }];
+    }
 
     const bodyRows = [...table.querySelectorAll('tbody tr, tr:not(:first-child)')];
     for (const tr of bodyRows) {
@@ -175,15 +227,40 @@ async function scrapeMonth(page, year, month) {
     return results;
   });
 
+  if (rows[0]?.__headerError) {
+    await saveDebug(page, 'bad-table-headers');
+    throw new Error(`Could not identify Granot report columns: ${JSON.stringify(rows[0].headers)}`);
+  }
+
+  await saveDebug(page, '08-report-scraped');
   return rows;
 }
 
-async function sync(monthsBack = 3) {
-  console.log('[granot] NETWORK_ID:', process.env.GRANOT_NETWORK_ID);
-  console.log('[granot] USERNAME:', process.env.GRANOT_USERNAME);
+function aggregateRows(rows, monthKey) {
+  const byChannel = {};
+  for (const row of rows) {
+    const channelId = SOURCE_MAP[row.adver];
+    if (!channelId) continue;
+    if (!byChannel[channelId]) byChannel[channelId] = { leads: 0, booked: 0, revenue: 0 };
+    byChannel[channelId].leads   += row.entry;
+    byChannel[channelId].booked  += row.booked;
+    byChannel[channelId].revenue += row.jobTotal;
+  }
 
+  return Object.entries(byChannel).map(([channelId, data]) => ({
+    channel_id: channelId,
+    month: monthKey,
+    revenue: data.revenue,
+    leads:   data.leads,
+    booked:  data.booked,
+    source:  'granot',
+    updated_at: new Date().toISOString(),
+  }));
+}
+
+async function collectMetrics(monthsBack = 3) {
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: process.env.GRANOT_HEADLESS === 'true' ? 'new' : false,
     executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     userDataDir: '/tmp/granot-chrome-profile',
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-extensions', '--disable-features=AutofillEnableAccountWalletStorage', '--password-store=basic'],
@@ -196,18 +273,15 @@ async function sync(monthsBack = 3) {
     // Navigate directly to the app (login form lives here, not in admin.htm)
     console.log('[granot] Navigating to app...');
     await page.goto(WC_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.screenshot({ path: '/tmp/granot_step1.png', fullPage: true });
-    console.log('[granot] Step 1 screenshot: /tmp/granot_step1.png');
+    await saveDebug(page, '00-app');
 
     // Step 1: Network login
     await networkLogin(page);
-    await page.screenshot({ path: '/tmp/granot_step2.png', fullPage: true });
-    console.log('[granot] Step 2 screenshot: /tmp/granot_step2.png');
+    await saveDebug(page, '03-after-network-login');
 
     // Step 2: User login
     await userLogin(page);
-    await page.screenshot({ path: '/tmp/granot_step3.png', fullPage: true });
-    console.log('[granot] Step 3 screenshot: /tmp/granot_step3.png');
+    await saveDebug(page, '03-after-user-login');
 
     // Step 3: Scrape last N months
     const allRows = [];
@@ -221,32 +295,30 @@ async function sync(monthsBack = 3) {
 
       console.log(`[granot] Scraping ${monthKey}...`);
       const rows = await scrapeMonth(page, year, month);
-
-
-      // Aggregate by channel (multiple Granot rows → same channel)
-      const byChannel = {};
-      for (const row of rows) {
-        const channelId = SOURCE_MAP[row.adver];
-        if (!channelId) continue;
-        if (!byChannel[channelId]) byChannel[channelId] = { leads: 0, booked: 0, revenue: 0 };
-        byChannel[channelId].leads   += row.entry;
-        byChannel[channelId].booked  += row.booked;
-        byChannel[channelId].revenue += row.jobTotal;
-      }
-
-      for (const [channelId, data] of Object.entries(byChannel)) {
-        allRows.push({
-          channel_id: channelId,
-          month: monthKey,
-          revenue: data.revenue,
-          leads:   data.leads,
-          booked:  data.booked,
-          source:  'granot',
-          updated_at: new Date().toISOString(),
-        });
-      }
+      allRows.push(...aggregateRows(rows, monthKey));
     }
 
+    return allRows;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function probe(monthsBack = 1) {
+  console.log('[granot] Starting probe');
+  const rows = await collectMetrics(monthsBack);
+  return {
+    rowsAffected: rows.length,
+    rows,
+    message: `Probed ${rows.length} channel-month rows from Granot (${monthsBack} months)`,
+  };
+}
+
+async function sync(monthsBack = 3) {
+  console.log('[granot] Starting sync');
+  const allRows = await collectMetrics(monthsBack);
+
+  try {
     // Upsert all rows (preserves spend from other sources)
     if (allRows.length > 0) {
       const { error } = await supabase
@@ -259,9 +331,9 @@ async function sync(monthsBack = 3) {
       rowsAffected: allRows.length,
       message: `Synced ${allRows.length} channel-month rows from Granot (${monthsBack} months)`,
     };
-  } finally {
-    await browser.close();
+  } catch (err) {
+    throw err;
   }
 }
 
-module.exports = { sync };
+module.exports = { sync, probe, collectMetrics };
